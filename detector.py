@@ -203,6 +203,7 @@ def visualize_detections(image: np.ndarray, detections: dict,
     vis_image = image.copy()
     bboxes = detections['bboxes']
     scores = detections['scores']
+    labels = detections.get('labels', [])
 
     # 색상 생성
     colors = generate_distinct_colors(len(bboxes))
@@ -217,8 +218,12 @@ def visualize_detections(image: np.ndarray, detections: dict,
             # 바운딩 박스 그리기
             cv2.rectangle(vis_image, (x1, y1), (x2, y2), color, thickness)
 
-            # 라벨 텍스트 준비
-            label_text = f"Object_{i+1} {score:.2f}"
+            # 라벨 텍스트 준비 - COCO 클래스 이름 사용
+            if labels and i < len(labels):
+                class_name = get_class_name(labels[i])
+                label_text = f"{class_name}: {score:.2f}"
+            else:
+                label_text = f"Object_{i+1}: {score:.2f}"
 
             # 텍스트 배경 박스 크기 계산
             (text_width, text_height), baseline = cv2.getTextSize(
@@ -301,6 +306,41 @@ def save_detection_result(image_path: str, output_path: str, model: DetInference
 def cleanup():
     """리소스 정리 함수"""
     _torch_patcher.unpatch()
+
+
+# COCO 데이터셋 클래스 이름 정의
+COCO_CLASSES = [
+    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+    'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+    'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
+    'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
+    'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+    'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
+    'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+    'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+    'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
+    'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+    'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+    'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+    'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
+    'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+]
+
+
+def get_class_name(class_id):
+    """
+    클래스 ID를 클래스 이름으로 변환
+
+    Args:
+        class_id (int): COCO 클래스 ID (0-79)
+
+    Returns:
+        str: 클래스 이름
+    """
+    if 0 <= class_id < len(COCO_CLASSES):
+        return COCO_CLASSES[class_id]
+    else:
+        return f"unknown_{class_id}"
 
 
 # 모듈 종료 시 자동으로 패치 해제
