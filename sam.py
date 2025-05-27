@@ -3,6 +3,7 @@ SAM (Segment Anything Model) 통합 모듈
 - Facebook의 Segment Anything Model 사용
 - DETR bbox를 prompt로 활용한 Instance Segmentation
 - 다양한 SAM 모델 크기 지원 (ViT-B, ViT-L, ViT-H)
+- 세그멘테이션 전용 시각화 기능 추가
 """
 
 import cv2
@@ -272,6 +273,215 @@ def visualize_masks(image: np.ndarray, masks: List[np.ndarray],
             result_image = cv2.addWeighted(result_image, 1-alpha, colored_mask, alpha, 0)
 
     return result_image
+
+
+def visualize_segmentation_only(image: np.ndarray, masks: List[np.ndarray],
+                               colors: Optional[List[Tuple[int, int, int]]] = None,
+                               alpha: float = 0.6,
+                               use_smooth_edges: bool = True) -> np.ndarray:
+    """
+    원본 이미지에 세그멘테이션 마스크만 깔끔하게 오버레이
+    bbox나 텍스트 없이 순수한 세그멘테이션 결과만 표시
+
+    Args:
+        image: 입력 이미지 (BGR)
+        masks: 마스크 리스트
+        colors: 각 마스크의 색상 리스트 (BGR), None이면 자동 생성
+        alpha: 마스크 투명도 (0.0-1.0)
+        use_smooth_edges: 마스크 가장자리 부드럽게 처리할지 여부
+
+    Returns:
+        np.ndarray: 세그멘테이션만 오버레이된 깔끔한 이미지
+    """
+    if not masks:
+        print("⚠️ 표시할 마스크가 없습니다.")
+        return image.copy()
+
+    # 유효한 마스크만 필터링
+    valid_masks = []
+    for i, mask in enumerate(masks):
+        if isinstance(mask, np.ndarray) and mask.any():
+            valid_masks.append(mask)
+        else:
+            print(f"  ⚠️ 마스크 {i+1}은 비어있거나 유효하지 않습니다.")
+
+    if not valid_masks:
+        print("⚠️ 유효한 마스크가 없습니다.")
+        return image.copy()
+
+    result_image = image.copy()
+
+    # 고품질 색상 팔레트 생성
+    if colors is None:
+        colors = generate_high_quality_colors(len(valid_masks))
+
+    print(f"🎨 {len(valid_masks)}개 유효한 마스크를 오버레이 중...")
+
+    # 각 마스크를 개별적으로 처리
+    for i, (mask, color) in enumerate(zip(valid_masks, colors)):
+        try:
+            # 마스크 타입 및 크기 확인
+            if not isinstance(mask, np.ndarray):
+                print(f"  ❌ 마스크 {i+1}: 올바른 numpy array가 아닙니다.")
+                continue
+
+            # 마스크를 boolean에서 uint8로 변환
+            if mask.dtype == bool:
+                processed_mask = mask.astype(np.uint8) * 255
+            else:
+                processed_mask = mask.astype(np.uint8)
+
+            # 마스크가 2D인지 확인
+            if len(processed_mask.shape) != 2:
+                print(f"  ❌ 마스크 {i+1}: 2D 마스크가 아닙니다. 형태: {processed_mask.shape}")
+                continue
+
+            # 이미지와 마스크 크기 일치 확인
+            if processed_mask.shape != image.shape[:2]:
+                print(f"  ❌ 마스크 {i+1}: 크기 불일치. 마스크: {processed_mask.shape}, 이미지: {image.shape[:2]}")
+                continue
+
+            mask_area = np.sum(processed_mask > 0)
+            if mask_area == 0:
+                print(f"  ⚠️ 마스크 {i+1}: 빈 마스크입니다.")
+                continue
+
+            print(f"  🎯 마스크 {i+1}: {mask_area} 픽셀 ({mask_area/processed_mask.size*100:.1f}%)")
+
+            # 부드러운 가장자리 처리
+            if use_smooth_edges and mask_area > 100:  # 작은 마스크는 블러 생략
+                processed_mask = cv2.GaussianBlur(processed_mask, (3, 3), 0.5)
+
+            # 색상 마스크 생성
+            colored_mask = np.zeros_like(result_image)
+            mask_indices = processed_mask > 0
+            colored_mask[mask_indices] = color
+
+            # 알파 블렌딩
+            if processed_mask.max() > 1:  # 0-255 범위인 경우
+                mask_alpha = processed_mask.astype(np.float32) / 255.0
+            else:  # 0-1 범위인 경우
+                mask_alpha = processed_mask.astype(np.float32)
+
+            # 3채널로 확장
+            mask_alpha_3d = np.stack([mask_alpha] * 3, axis=-1)
+
+            # 블렌딩 적용
+            result_image = result_image.astype(np.float32)
+            colored_mask = colored_mask.astype(np.float32)
+
+            blend_alpha = mask_alpha_3d * alpha
+            result_image = result_image * (1 - blend_alpha) + colored_mask * blend_alpha
+
+            result_image = np.clip(result_image, 0, 255).astype(np.uint8)
+
+            print(f"  ✅ 마스크 {i+1} 오버레이 완료")
+
+        except Exception as e:
+            print(f"  ❌ 마스크 {i+1} 처리 중 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    print("✅ 세그멘테이션 전용 시각화 완료")
+    return result_image
+
+
+def generate_high_quality_colors(n: int) -> List[Tuple[int, int, int]]:
+    """
+    고품질의 구별되는 색상 팔레트 생성
+
+    Args:
+        n: 생성할 색상 개수
+
+    Returns:
+        List[Tuple[int, int, int]]: BGR 색상 리스트
+    """
+    if n == 0:
+        return []
+
+    colors = []
+
+    # 미리 정의된 고품질 색상 팔레트 (BGR 순서)
+    predefined_colors = [
+        (255, 100, 100),   # 밝은 파랑
+        (100, 255, 100),   # 밝은 초록
+        (100, 100, 255),   # 밝은 빨강
+        (255, 255, 100),   # 밝은 청록
+        (255, 100, 255),   # 밝은 마젠타
+        (100, 255, 255),   # 밝은 노랑
+        (200, 150, 255),   # 라벤더
+        (150, 255, 200),   # 민트
+        (255, 200, 150),   # 복숭아
+        (255, 150, 200),   # 핑크
+        (150, 200, 255),   # 하늘색
+        (200, 255, 150),   # 라임
+    ]
+
+    # 미리 정의된 색상을 우선 사용
+    for i in range(min(n, len(predefined_colors))):
+        colors.append(predefined_colors[i])
+
+    # 추가 색상이 필요한 경우 HSV 공간에서 생성
+    for i in range(len(predefined_colors), n):
+        # 황금 비율을 사용한 색상 분산
+        golden_ratio = 0.618033988749
+        hue = (i * golden_ratio) % 1.0
+
+        # HSV 값 설정 (채도와 밝기를 높게 설정)
+        h = int(hue * 180)
+        s = 255  # 최대 채도
+        v = 255  # 최대 명도
+
+        # HSV를 BGR로 변환
+        hsv = np.array([[[h, s, v]]], dtype=np.uint8)
+        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        colors.append(tuple(map(int, bgr[0][0])))
+
+    return colors
+
+
+def save_segmentation_only_result(image_path: str, masks: List[np.ndarray],
+                                 output_path: str, alpha: float = 0.6,
+                                 use_smooth_edges: bool = True) -> bool:
+    """
+    세그멘테이션 전용 결과를 파일로 저장
+
+    Args:
+        image_path: 원본 이미지 경로
+        masks: 세그멘테이션 마스크 리스트
+        output_path: 저장할 파일 경로
+        alpha: 마스크 투명도
+        use_smooth_edges: 부드러운 가장자리 처리 여부
+
+    Returns:
+        bool: 저장 성공 여부
+    """
+    try:
+        # 원본 이미지 로딩
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"❌ 원본 이미지를 읽을 수 없습니다: {image_path}")
+            return False
+
+        # 세그멘테이션 전용 시각화
+        result = visualize_segmentation_only(
+            image, masks, alpha=alpha, use_smooth_edges=use_smooth_edges
+        )
+
+        # 결과 저장
+        success = cv2.imwrite(output_path, result)
+
+        if success:
+            print(f"💾 세그멘테이션 전용 결과 저장: {output_path}")
+        else:
+            print(f"❌ 파일 저장 실패: {output_path}")
+
+        return success
+
+    except Exception as e:
+        print(f"❌ 세그멘테이션 결과 저장 중 오류: {e}")
+        return False
 
 
 def visualize(input_img: np.ndarray, input_mask: np.ndarray,
