@@ -26,15 +26,13 @@ def create_test_image_with_clear_objects():
     # 고해상도 테스트 이미지 생성
     height, width = 720, 960
 
-    # 그라데이션 배경 생성
+    # 그라데이션 배경 생성 (벡터화)
+    y = np.arange(height).reshape(-1, 1)
+    x = np.arange(width).reshape(1, -1)
     background = np.zeros((height, width, 3), dtype=np.uint8)
-    for i in range(height):
-        for j in range(width):
-            background[i, j] = [
-                int(120 + 60 * np.sin(i / 100)),
-                int(140 + 40 * np.cos(j / 150)),
-                int(160 + 30 * np.sin((i + j) / 200))
-            ]
+    background[..., 0] = np.clip(120 + 60 * np.sin(y / 100), 0, 255).astype(np.uint8)
+    background[..., 1] = np.clip(140 + 40 * np.cos(x / 150), 0, 255).astype(np.uint8)
+    background[..., 2] = np.clip(160 + 30 * np.sin((y + x) / 200), 0, 255).astype(np.uint8)
 
     # 명확한 객체들 추가
 
